@@ -1,0 +1,16 @@
+================
+ Change history
+================
+
+.. contents::
+    :local:
+
+.. _version-0.0.1
+
+0.0.1
+=====
+:release-date: TBA
+:status: PLANNING
+:branch: 3.0
+
+* Initial fork from amqplib version 1.0.2
