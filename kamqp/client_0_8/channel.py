@@ -78,6 +78,8 @@ class Channel(AbstractChannel):
         self.returned_messages = Queue()
         self.callbacks = {}
         self.auto_decode = auto_decode
+        self.events = {"basic_return": []}
+        self.no_ack_consumers = set()
 
         self._x_open()
 
@@ -184,15 +186,17 @@ class Channel(AbstractChannel):
             # already closed
             return
 
-        args = AMQPWriter()
-        args.write_short(reply_code)
-        args.write_shortstr(reply_text)
-        args.write_short(method_sig[0]) # class_id
-        args.write_short(method_sig[1]) # method_id
-        self._send_method((20, 40), args)
-        return self.wait(allowed_methods=[
-                          (20, 41),    # Channel.close_ok
-                        ])
+        try:
+            args = AMQPWriter()
+            args.write_short(reply_code)
+            args.write_shortstr(reply_text)
+            args.write_short(method_sig[0]) # class_id
+            args.write_short(method_sig[1]) # method_id
+            self._send_method((20, 40), args)
+            # send Channel.close_ok
+            return self.wait(allowed_methods=[(20, 41)])
+        finally:
+            self.connection = None
 
 
     def _close(self, args):
@@ -248,24 +252,7 @@ class Channel(AbstractChannel):
         class_id = args.read_short()
         method_id = args.read_short()
 
-#        self.close_ok()
-
-
-#    def close_ok(self):
-#        """
-#        confirm a channel close
-#
-#        This method confirms a Channel.Close method and tells the
-#        recipient that it is safe to release resources for the channel
-#        and close the socket.
-#
-#        RULE:
-#
-#            A peer that detects a socket closure without having
-#            received a Channel.Close-Ok handshake method SHOULD log
-#            the error.
-#
-#        """
+        # close_ok
         self._send_method((20, 41))
         self._do_close()
 
@@ -1787,9 +1774,10 @@ class Channel(AbstractChannel):
         args.write_shortstr(consumer_tag)
         args.write_bit(nowait)
         self._send_method((60, 30), args)
-        return self.wait(allowed_methods=[
-                          (60, 31),    # Channel.basic_cancel_ok
-                        ])
+        # wait for Channel.basic_cancel_ok
+        ret = self.wait(allowed_methods=[(60, 31)])
+        self.no_ack_consumers.discard(consumer_tag)
+        return ret
 
 
     def _basic_cancel_ok(self, args):
@@ -1945,6 +1933,8 @@ class Channel(AbstractChannel):
 
         self.callbacks[consumer_tag] = callback
 
+        if no_ack:
+            self.no_ack_consumers.add(consumer_tag)
         return consumer_tag
 
 
@@ -2549,10 +2539,12 @@ class Channel(AbstractChannel):
         exchange = args.read_shortstr()
         routing_key = args.read_shortstr()
 
-        self.returned_messages.put(
-            (reply_code, reply_text, exchange, routing_key, msg)
-            )
-
+        exc = AMQPChannelException(reply_code, reply_text, (50, 60))
+        if self.events["basic_return"]:
+            for callback in self.events["basic_return"]:
+                callback(exc, exchange, routing_key, msg)
+        else:
+            raise exc
 
     #############
     #

@@ -18,35 +18,41 @@ AMQP 0-8 Connections
 # License along with this library; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 
+from __future__ import absolute_import
+
 import logging
+import socket
+try:
+    from ssl import SSLError
+except ImportError:
+    class SSLError(Exception):  # noqa
+        pass
 
-from abstract_channel import AbstractChannel
-from channel import Channel
-from exceptions import *
-from method_framing import MethodReader, MethodWriter
-from serialization import AMQPReader, AMQPWriter
-from transport import create_transport
+from .. import __version__
 
-__all__ =  [
-            'Connection',
-           ]
+from .abstract_channel import AbstractChannel
+from .channel import Channel
+from .exceptions import AMQPException, AMQPConnectionException
+from .method_framing import MethodReader, MethodWriter
+from .serialization import AMQPWriter
+from .transport import create_transport
+
+__all__ = ["Connection"]
 
 #
 # Client property info that gets sent to the server on connection startup
 #
-LIBRARY_PROPERTIES = {
-    'library': 'Python amqplib',
-    'library_version': '1.0.2',
-    }
+LIBRARY_PROPERTIES = {"library": "kamqp (python)",
+                      'library_version': __version__}
 
 AMQP_LOGGER = logging.getLogger('amqplib')
 
-DEFAULT_CHANNEL_MAX = 2**16
-DEFAULT_FRAME_MAX = 2**17
+DEFAULT_CHANNEL_MAX = 0xffff
+DEFAULT_FRAME_MAX = 2 ** 17
+
 
 class Connection(AbstractChannel):
-    """
-    The connection class provides methods for a client to establish a
+    """The connection class provides methods for a client to establish a
     network connection to a server, and for both peers to operate the
     connection thereafter.
 
@@ -64,24 +70,14 @@ class Connection(AbstractChannel):
                             / S:CLOSE C:CLOSE-OK
 
     """
-    def __init__(self,
-        host='localhost',
-        userid='guest',
-        password='guest',
-        login_method='AMQPLAIN',
-        login_response=None,
-        virtual_host='/',
-        locale='en_US',
-        client_properties=None,
-        ssl=False,
-        insist=False,
-        connect_timeout=None,
-        heartbeat=0,
-        frame_max=DEFAULT_FRAME_MAX,
-        channel_max=DEFAULT_CHANNEL_MAX,
-        **kwargs):
-        """
-        Create a connection to the specified host, which should be
+    Channel = Channel
+
+    def __init__(self, host='localhost', userid='guest', password='guest',
+            login_method='AMQPLAIN', login_response=None, virtual_host='/',
+            locale='en_US', client_properties=None, ssl=False, insist=False,
+            connect_timeout=None, heartbeat=0, frame_max=DEFAULT_FRAME_MAX,
+            channel_max=DEFAULT_CHANNEL_MAX, **kwargs):
+        """Create a connection to the specified host, which should be
         a 'host[:port]', such as 'localhost', or '1.2.3.4:5672'
         (defaults to 'localhost', if a port is not specified then
         5672 is used)
@@ -94,22 +90,20 @@ class Connection(AbstractChannel):
         requiring certain certificates.
 
         """
-        if (login_response is None) \
-        and (userid is not None) \
-        and (password is not None):
+        if (login_response is None) and (userid is not None) \
+                and (password is not None):
             login_response = AMQPWriter()
-            login_response.write_table({'LOGIN': userid, 'PASSWORD': password})
-            login_response = login_response.getvalue()[4:]  #Skip the length
-                                                            #at the beginning
+            login_response.write_table({"LOGIN": userid, "PASSWORD": password})
+            login_response = login_response.getvalue()[4:]  # Skip length at
+                                                            # at the beginning
 
-        d = {}
-        d.update(LIBRARY_PROPERTIES)
+        d = dict(LIBRARY_PROPERTIES)
         if client_properties:
             d.update(client_properties)
 
         self.known_hosts = ''
 
-        while True:
+        while 1:
             self.channels = {}
             # The connection object itself is treated as channel 0
             super(Connection, self).__init__(self, 0)
@@ -136,18 +130,12 @@ class Connection(AbstractChannel):
             self.method_reader = MethodReader(self.transport)
             self.method_writer = MethodWriter(self.transport, self.frame_max)
 
-            self.wait(allowed_methods=[
-                    (10, 10), # start
-                    ])
-
+            self.wait(allowed_methods=[(10, 10)])  # start
             self._x_start_ok(d, login_method, login_response, locale)
 
             self._wait_tune_ok = True
             while self._wait_tune_ok:
-                self.wait(allowed_methods=[
-                    (10, 20), # secure
-                    (10, 30), # tune
-                    ])
+                self.wait(allowed_methods=[(10, 20), (10, 30)])  # secure|tune
 
             host = self._x_open(virtual_host, insist=insist)
             if host is None:
@@ -159,73 +147,83 @@ class Connection(AbstractChannel):
                 self.close()
             except Exception:
                 pass
+                return
 
+    def drain_events(self, allowed_methods=None, timeout=None):
+        """Wait for an event on any channel."""
+        return self.wait_multi(self.channels.values(), timeout=timeout)
 
-    def _do_close(self):
-        self.transport.close()
-        self.transport = None
+    def wait_multi(self, channels, allowed_methods=None, timeout=None):
+        """Wait for an event on a channel."""
+        chanmap = dict((chan.channel_id, chan) for chan in channels)
+        chanid, method_sig, args, content = self._wait(
+                chanmap.keys(), allowed_methods, timeout=timeout)
 
-        temp_list = [x for x in self.channels.values() if x is not self]
-        for ch in temp_list:
-            ch._do_close()
+        channel = chanmap[chanid]
 
-        self.connection = self.channels = None
+        if content and channel.auto_decode and \
+                hasattr(content, "content_encoding"):
+            try:
+                content.body = content.body.decode(content.content_encoding)
+            except Exception:
+                pass
 
+        amqp_method = channel._METHOD_MAP.get(method_sig, None)
 
-    def _get_free_channel_id(self):
-        for i in xrange(1, self.channel_max+1):
-            if i not in self.channels:
-                return i
-        raise AMQPException('No free channel ids, current=%d, channel_max=%d'
-            % (len(self.channels), self.channel_max))
+        if amqp_method is None:
+            raise Exception("Unknown AMQP method (%d, %d)" % method_sig)
 
+        if content is None:
+            return amqp_method(channel, args)
+        else:
+            return amqp_method(channel, args, content)
 
-    def _wait_method(self, channel_id, allowed_methods):
-        """
-        Wait for a method from the server destined for
-        a particular channel.
+    def read_timeout(self, timeout=None):
+        if timeout is None:
+            return self.method_reader.read_method()
+        sock = self.transport.sock
+        prev = sock.gettimeout()
+        sock.settimeout(timeout)
+        try:
+            return self.method_reader.read_method()
+        except SSLError, exc:
+            # http://bugs.python.org/issue10272
+            if "timed out" in str(exc):
+                raise socket.timeout()
+            raise
+        finally:
+            sock.settimeout(prev)
 
-        """
-        #
-        # Check the channel's deferred methods
-        #
-        method_queue = self.channels[channel_id].method_queue
+    def _wait(self, channel_ids, allowed_methods, timeout=None):
+        channels = self.channels
 
-        for queued_method in method_queue:
-            method_sig = queued_method[0]
-            if (allowed_methods is None) \
-            or (method_sig in allowed_methods) \
-            or (method_sig == (20, 40)):
-                method_queue.remove(queued_method)
-                return queued_method
+        for channel_id in channel_ids:
+            method_queue = channels[channel_id].method_queue
+            for queued_method in method_queue:
+                method_sig = queued_method[0]
+                if (allowed_methods is None) \
+                        or (method_sig in allowed_methods) \
+                        or (method_sig == (20, 40)):
+                    method_queue.remove(queued_method)
+                    method_sig, args, content = queued_method
+                    return channel_id, method_sig, args, content
 
-        #
         # Nothing queued, need to wait for a method from the peer
-        #
-        while True:
-            channel, method_sig, args, content = \
-                self.method_reader.read_method()
+        read_timeout = self.read_timeout
+        wait = self.wait
+        while 1:
+            data = read_timeout(timeout)
+            channel, method_sig, args, content = data
 
-            if (channel == channel_id) \
-            and ((allowed_methods is None) \
-                or (method_sig in allowed_methods) \
-                or (method_sig == (20, 40))):
-                return method_sig, args, content
+            if (channel in channel_ids) \
+                    and ((allowed_methods is None) \
+                    or (method_sig in allowed_methods) \
+                    or (method_sig == (20, 40))):
+                return channel, method_sig, args, content
 
-            #
-            # Certain methods like basic_return should be dispatched
-            # immediately rather than being queued, even if they're not
-            # one of the 'allowed_methods' we're looking for.
-            #
-            if (channel != 0) and (method_sig in Channel._IMMEDIATE_METHODS):
-                self.channels[channel].dispatch_method(method_sig, args, content)
-                continue
-
-            #
-            # Not the channel and/or method we were looking for.  Queue
+            # Not the channel and/or method we were looking for. Queue
             # this method for later
-            #
-            self.channels[channel].method_queue.append((method_sig, args, content))
+            channels[channel].method_queue.append((method_sig, args, content))
 
             #
             # If we just queued up a method for channel 0 (the Connection
@@ -233,26 +231,43 @@ class Connection(AbstractChannel):
             # error, so deal with it right away.
             #
             if channel == 0:
-                self.wait()
+                wait()
 
+    def _do_close(self):
+        self.transport.close()
+        self.transport = None
+
+        channels = [x for x in self.channels.values() if x is not self]
+        for ch in channels:
+            ch._do_close()
+        self.connection = self.channels = None
+
+    def _get_free_channel_id(self):
+        for i in xrange(1, self.channel_max + 1):
+            if i not in self.channels:
+                return i
+        raise AMQPException(
+                "No free channel ids, current=%d, channel_max=%d" % (
+                    len(self.channels), self.channel_max))
+
+    def _wait_method(self, channel_id, allowed_methods):
+        """Wait for a method from the server destined for
+        a particular channel."""
+        channel, method_sig, args, content = self._wait([channel_id],
+                                                        allowed_methods)
+        assert channel == channel_id
+        return method_sig, args, content
 
     def channel(self, channel_id=None):
-        """
-        Fetch a Channel object identified by the numeric channel_id, or
-        create that object if it doesn't already exist.
-
-        """
-        if channel_id in self.channels:
+        """Fetch a Channel object identified by the numeric channel_id, or
+        create that object if it doesn't already exist."""
+        try:
             return self.channels[channel_id]
-
-        return Channel(self, channel_id)
-
-
-    #################
+        except KeyError:
+            return self.Channel(self, channel_id)
 
     def close(self, reply_code=0, reply_text='', method_sig=(0, 0)):
-        """
-        request a connection close
+        """Request a connection close.
 
         This method indicates that the sender wants to close the
         connection. This may be due to internal conditions (e.g. a
@@ -305,24 +320,20 @@ class Connection(AbstractChannel):
                 is the ID of the method.
 
         """
-        if self.transport is None:
-            # already closed
+        if self.transport is None:  # already closed
             return
 
         args = AMQPWriter()
         args.write_short(reply_code)
         args.write_shortstr(reply_text)
-        args.write_short(method_sig[0]) # class_id
-        args.write_short(method_sig[1]) # method_id
+        args.write_short(method_sig[0])  # class_id
+        args.write_short(method_sig[1])  # method_id
         self._send_method((10, 60), args)
-        return self.wait(allowed_methods=[
-                          (10, 61),    # Connection.close_ok
-                        ])
-
+        # wait for Connection.close_ok
+        return self.wait(allowed_methods=[(10, 61)])
 
     def _close(self, args):
-        """
-        request a connection close
+        """Request a connection close.
 
         This method indicates that the sender wants to close the
         connection. This may be due to internal conditions (e.g. a
@@ -381,13 +392,12 @@ class Connection(AbstractChannel):
         method_id = args.read_short()
 
         self._x_close_ok()
-
-        raise AMQPConnectionException(reply_code, reply_text, (class_id, method_id))
-
+        raise AMQPConnectionException(reply_code,
+                                      reply_text,
+                                      (class_id, method_id))
 
     def _x_close_ok(self):
-        """
-        confirm a connection close
+        """Confirm a connection close.
 
         This method confirms a Connection.Close method and tells the
         recipient that it is safe to release resources for the
@@ -402,10 +412,8 @@ class Connection(AbstractChannel):
         self._send_method((10, 61))
         self._do_close()
 
-
     def _close_ok(self, args):
-        """
-        confirm a connection close
+        """Confirm a connection close.
 
         This method confirms a Connection.Close method and tells the
         recipient that it is safe to release resources for the
@@ -419,10 +427,8 @@ class Connection(AbstractChannel):
         """
         self._do_close()
 
-
     def _x_open(self, virtual_host, capabilities='', insist=False):
-        """
-        open connection to virtual host
+        """Open connection to virtual host
 
         This method opens a connection to a virtual host, which is a
         collection of resources, and acts to separate multiple
@@ -491,15 +497,12 @@ class Connection(AbstractChannel):
         args.write_shortstr(capabilities)
         args.write_bit(insist)
         self._send_method((10, 40), args)
-        return self.wait(allowed_methods=[
-                          (10, 41),    # Connection.open_ok
-                          (10, 50),    # Connection.redirect
-                        ])
-
+        # wait for Connection.open_ok || .redirect
+        return self.wait(allowed_methods=[(10, 41),
+                                          (10, 50)])
 
     def _open_ok(self, args):
-        """
-        signal that the connection is ready
+        """Signal that the connection is ready
 
         This method signals to the client that the connection is ready
         for use.
@@ -509,13 +512,10 @@ class Connection(AbstractChannel):
 
         """
         self.known_hosts = args.read_shortstr()
-        AMQP_LOGGER.debug('Open OK! known_hosts [%s]' % self.known_hosts)
-        return None
-
+        AMQP_LOGGER.debug('Open OK! known_hosts [%s]' % (self.known_hosts, ))
 
     def _redirect(self, args):
-        """
-        asks the client to use a different server
+        """Asks the client to use a different server
 
         This method redirects the client to another server, based on
         the requested virtual host and/or capabilities.
@@ -543,13 +543,12 @@ class Connection(AbstractChannel):
         """
         host = args.read_shortstr()
         self.known_hosts = args.read_shortstr()
-        AMQP_LOGGER.debug('Redirected to [%s], known_hosts [%s]' % (host, self.known_hosts))
+        AMQP_LOGGER.debug('Redirected to [%s], known_hosts [%s]' % (
+                            host, self.known_hosts))
         return host
 
-
     def _secure(self, args):
-        """
-        security mechanism challenge
+        """Security mechanism challenge.
 
         The SASL protocol works by exchanging challenges and responses
         until both peers have received sufficient information to
@@ -565,12 +564,11 @@ class Connection(AbstractChannel):
                 passed to the security mechanism.
 
         """
-        challenge = args.read_longstr()
-
+        #challenge = args.read_longstr()
+        pass
 
     def _x_secure_ok(self, response):
-        """
-        security mechanism response
+        """Security mechanism response.
 
         This method attempts to authenticate, passing a block of SASL
         data for the security mechanism at the server side.
@@ -589,10 +587,8 @@ class Connection(AbstractChannel):
         args.write_longstr(response)
         self._send_method((10, 21), args)
 
-
     def _start(self, args):
-        """
-        start connection negotiation
+        """Start connection negotiation
 
         This method starts the connection negotiation process by
         telling the client the protocol version that the server
@@ -661,14 +657,16 @@ class Connection(AbstractChannel):
         self.mechanisms = args.read_longstr().split(' ')
         self.locales = args.read_longstr().split(' ')
 
-        AMQP_LOGGER.debug('Start from server, version: %d.%d, properties: %s, mechanisms: %s, locales: %s'
-                % (self.version_major, self.version_minor,
-                   str(self.server_properties), self.mechanisms, self.locales))
-
+        AMQP_LOGGER.debug(
+            'Start from server, version: %d.%d, properties: %s, '
+            'mechanisms: %s, locales: %s' % (self.version_major,
+                                             self.version_minor,
+                                             str(self.server_properties),
+                                             self.mechanisms,
+                                             self.locales))
 
     def _x_start_ok(self, client_properties, mechanism, response, locale):
-        """
-        select security mechanism and locale
+        """Select security mechanism and locale.
 
         This method selects a SASL security mechanism. ASL uses SASL
         (RFC2222) to negotiate authentication and encryption.
@@ -723,10 +721,8 @@ class Connection(AbstractChannel):
         args.write_shortstr(locale)
         self._send_method((10, 11), args)
 
-
     def _tune(self, args):
-        """
-        propose connection tuning parameters
+        """Propose connection tuning parameters
 
         This method proposes a set of connection configuration values
         to the client.  The client can accept and/or adjust these.
@@ -770,14 +766,12 @@ class Connection(AbstractChannel):
         self.channel_max = args.read_short() or self.channel_max
         self.frame_max = args.read_long() or self.frame_max
         self.method_writer.frame_max = self.frame_max
-        heartbeat = args.read_short()
+        #_heartbeat = args.read_short()
 
         self._x_tune_ok(self.channel_max, self.frame_max, self.heartbeat)
 
-
     def _x_tune_ok(self, channel_max, frame_max, heartbeat):
-        """
-        negotiate connection tuning parameters
+        """Negotiate connection tuning parameters.
 
         This method sends the client's connection tuning parameters to
         the server. Certain fields are negotiated, others provide
@@ -832,7 +826,6 @@ class Connection(AbstractChannel):
         self._send_method((10, 31), args)
         self._wait_tune_ok = False
 
-
     _METHOD_MAP = {
         (10, 10): _start,
         (10, 20): _secure,
@@ -842,6 +835,5 @@ class Connection(AbstractChannel):
         (10, 60): _close,
         (10, 61): _close_ok,
         }
-
 
     _IMMEDIATE_METHODS = []
