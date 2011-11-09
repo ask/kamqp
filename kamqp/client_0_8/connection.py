@@ -41,6 +41,8 @@ LIBRARY_PROPERTIES = {
 
 AMQP_LOGGER = logging.getLogger('amqplib')
 
+DEFAULT_CHANNEL_MAX = 2**16
+DEFAULT_FRAME_MAX = 2**17
 
 class Connection(AbstractChannel):
     """
@@ -74,6 +76,9 @@ class Connection(AbstractChannel):
         ssl=False,
         insist=False,
         connect_timeout=None,
+        heartbeat=0,
+        frame_max=DEFAULT_FRAME_MAX,
+        channel_max=DEFAULT_CHANNEL_MAX,
         **kwargs):
         """
         Create a connection to the specified host, which should be
@@ -112,9 +117,9 @@ class Connection(AbstractChannel):
             self.transport = None
 
             # Properties set in the Tune method
-            self.channel_max = 65535
-            self.frame_max = 131072
-            self.heartbeat = 1
+            self.heartbeat = heartbeat or 0
+            self.frame_max = frame_max or DEFAULT_FRAME_MAX
+            self.channel_max = channel_max or DEFAULT_CHANNEL_MAX
 
             # Properties set in the Start method
             self.version_major = 0
