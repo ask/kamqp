@@ -114,7 +114,7 @@ class Connection(AbstractChannel):
             # Properties set in the Tune method
             self.channel_max = 65535
             self.frame_max = 131072
-            self.heartbeat = 0
+            self.heartbeat = 1
 
             # Properties set in the Start method
             self.version_major = 0
@@ -765,9 +765,9 @@ class Connection(AbstractChannel):
         self.channel_max = args.read_short() or self.channel_max
         self.frame_max = args.read_long() or self.frame_max
         self.method_writer.frame_max = self.frame_max
-        self.heartbeat = args.read_short()
+        heartbeat = args.read_short()
 
-        self._x_tune_ok(self.channel_max, self.frame_max, 0)
+        self._x_tune_ok(self.channel_max, self.frame_max, self.heartbeat)
 
 
     def _x_tune_ok(self, channel_max, frame_max, heartbeat):

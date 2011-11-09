@@ -1,4 +1,4 @@
-Notes on using Python amqplib
+Notes on using Python kamqp
 
 For more detailed descriptions of AMQP concepts, visit
 
@@ -9,9 +9,9 @@ This doc just covers some example usages of the Python library.
 +----------------------------------------------------------------
 |
 |  IMPORTANT!! - Connections are NOT thread-safe.  A multithreaded
-|                Python program can only use amqplib as long as
+|                Python program can only use kamqp as long as
 |                each thread has its own Connection object, and
-|                does not try to share amqplib objects such as
+|                does not try to share kamqp objects such as
 |                Connections or Channels with other threads.
 |
 +----------------------------------------------------------------
@@ -21,7 +21,7 @@ Importing the client
 This library currently supports the AMQP 0-8 spec, importing a module
 geared towards that spec can be done with something like:
 
-    import amqplib.client_0_8 as amqp
+    import kamqp.client_0_8 as amqp
 
 
 Connections
@@ -63,7 +63,7 @@ where most of the action is.
 
     ch = conn.channel(1)  # create and open channel with a specific numeric id
 
-    ch2 = conn.channel()   # let amqplib assign a channel number
+    ch2 = conn.channel()   # let kamqp assign a channel number
     print 'my channel is', ch2.channel_id
 
     ch3 = conn.channel(1) # since channel 1 is already created and open, just

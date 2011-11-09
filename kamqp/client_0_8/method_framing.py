@@ -20,6 +20,7 @@ Convert between frames and higher-level AMQP methods
 
 from Queue import Empty, Queue
 from struct import pack, unpack
+from time import time
 
 try:
     bytes
@@ -66,6 +67,13 @@ _CONTENT_METHODS = [
     (60, 60), # Basic.deliver
     (60, 71), # Basic.get_ok
     ]
+
+
+FRAME_METHOD = 1
+FRAME_HEADER = 2
+FRAME_BODY = 3
+FRAME_HEARTBEAT = 8
+
 
 
 class _PartialMessage(object):
@@ -118,8 +126,9 @@ class MethodReader(object):
         self.queue = Queue()
         self.running = False
         self.partial_messages = {}
+        self.last_heartbeat = None
         # For each channel, which type is expected next
-        self.expected_types = defaultdict(lambda:1)
+        self.expected_types = defaultdict(lambda: FRAME_METHOD)
 
 
     def _next_method(self):
@@ -138,20 +147,30 @@ class MethodReader(object):
                 self.queue.put(e)
                 break
 
-            if self.expected_types[channel] != frame_type:
+            if frame_type not in (self.expected_types[channel],
+                                  FRAME_HEARTBEAT):
                 self.queue.put((
                     channel,
-                    Exception('Received frame type %s while expecting type: %s' %
+                    Exception('Received frame type %s while expecting types: %s' %
                         (frame_type, self.expected_types[channel])
                         )
                     ))
-            elif frame_type == 1:
+            elif frame_type == FRAME_METHOD:
                 self._process_method_frame(channel, payload)
-            elif frame_type == 2:
+            elif frame_type == FRAME_HEADER:
                 self._process_content_header(channel, payload)
-            elif frame_type == 3:
+            elif frame_type == FRAME_BODY:
                 self._process_content_body(channel, payload)
+            elif frame_type == FRAME_HEARTBEAT:
+                self._process_heartbeat(channel, payload)
 
+    def _process_heartbeat(self, channel, payload):
+        self.last_heartbeat = time()
+        self.send_heartbeat()
+
+    def send_heartbeat(self):
+        print("RESPOND TO HEARTBEAT")
+        self.source.write_frame(FRAME_HEARTBEAT, 0, '')
 
     def _process_method_frame(self, channel, payload):
         """
@@ -185,12 +204,12 @@ class MethodReader(object):
             #
             self.queue.put((channel, partial.method_sig, partial.args, partial.msg))
             del self.partial_messages[channel]
-            self.expected_types[channel] = 1
+            self.expected_types[channel] = FRAME_METHOD
         else:
             #
             # wait for the content-body
             #
-            self.expected_types[channel] = 3
+            self.expected_types[channel] = FRAME_BODY
 
 
     def _process_content_body(self, channel, payload):
@@ -207,7 +226,7 @@ class MethodReader(object):
             #
             self.queue.put((channel, partial.method_sig, partial.args, partial.msg))
             del self.partial_messages[channel]
-            self.expected_types[channel] = 1
+            self.expected_types[channel] = FRAME_METHOD
 
 
     def read_method(self):
@@ -231,7 +250,6 @@ class MethodWriter(object):
     def __init__(self, dest, frame_max):
         self.dest = dest
         self.frame_max = frame_max
-
 
     def write_method(self, channel, method_sig, args, content=None):
         payload = pack('>HH', method_sig[0], method_sig[1]) + args

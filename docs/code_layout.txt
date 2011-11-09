@@ -5,7 +5,7 @@ The Connection class in connection.py is the heart of the library, it
 wires together the various other classes.
 
 The items in method_framing.py and transport.py should not be visible
-to the amqplib user.
+to the kamqp user.
 
 This is the general arrangement of how the classes communicate with
 each other:
