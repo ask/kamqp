@@ -28,7 +28,8 @@ from .. import __version__
 
 from .abstract_channel import AbstractChannel
 from .channel import Channel
-from .exceptions import AMQPInternalError, AMQPConnectionError
+from .exceptions import AMQPConnectionError
+from .heartbeats import Heartbeat
 from .method_framing import MethodReader, MethodWriter
 from .serialization import AMQPWriter
 from .transport import create_transport
@@ -72,7 +73,7 @@ class Connection(AbstractChannel):
             login_method='AMQPLAIN', login_response=None, virtual_host='/',
             locale='en_US', client_properties=None, ssl=False, insist=False,
             connect_timeout=None, heartbeat=0, frame_max=DEFAULT_FRAME_MAX,
-            channel_max=DEFAULT_CHANNEL_MAX, **kwargs):
+            channel_max=DEFAULT_CHANNEL_MAX, heartbeat_checker=Heartbeat, **kwargs):
         """Create a connection to the specified host, which should be
         a 'host[:port]', such as 'localhost', or '1.2.3.4:5672'
         (defaults to 'localhost', if a port is not specified then
@@ -137,14 +138,15 @@ class Connection(AbstractChannel):
             host = self._x_open(virtual_host, insist=insist)
             if host is None:
                 # we weren't redirected
-                return
+                break
 
             # we were redirected, close the socket, loop and try again
             try:
                 self.close()
             except Exception:
                 pass
-                return
+        if self.heartbeat:
+            self.heartbeat_checker = (heartbeat_checker or Heartbeat)(self)
 
     def _close_transport(self):
         if self.transport is not None:
@@ -247,7 +249,7 @@ class Connection(AbstractChannel):
         for i in xrange(1, self.channel_max + 1):
             if i not in self.channels:
                 return i
-        raise AMQPInternalError(
+        raise ValueError(
                 "No free channel ids, current=%d, channel_max=%d" % (
                     len(self.channels), self.channel_max))
 

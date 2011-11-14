@@ -28,6 +28,7 @@ except NameError:
 from collections import defaultdict
 
 from .basic_message import Message
+from .exceptions import AMQPRecoverableError
 from .serialization import AMQPReader
 
 __all__ = ["MethodReader"]
@@ -95,6 +96,8 @@ class MethodReader(object):
         self.last_heartbeat = None
         # For each channel, which type is expected next
         self.expected_types = defaultdict(lambda: FRAME_METHOD)
+        # not actually a byte count, just incremented whenever we receive.
+        self.bytes_recv = 0
 
     def _next_method(self):
         """Read the next method from the source, once one complete method has
@@ -107,6 +110,7 @@ class MethodReader(object):
                 self.queue.put(e)
                 break
 
+            self.bytes_recv += 1
             if frame_type not in (self.expected_types[channel],
                                   FRAME_HEARTBEAT):
                 self.queue.put((channel,
@@ -123,11 +127,9 @@ class MethodReader(object):
                 self._process_heartbeat(channel, payload)
 
     def _process_heartbeat(self, channel, payload):
-        self.last_heartbeat = time()
         self.send_heartbeat()
 
     def send_heartbeat(self):
-        print("RESPOND TO HEARTBEAT")
         self.source.write_frame(FRAME_HEARTBEAT, 0, '')
 
     def _process_method_frame(self, channel, payload):
@@ -181,9 +183,12 @@ class MethodWriter(object):
     def __init__(self, dest, frame_max):
         self.dest = dest
         self.frame_max = frame_max
+        self.bytes_sent = 0  # not actually bytes,
+                             # just updated whenever we write.
 
     def write_method(self, channel, method_sig, args, content=None):
         payload = pack('>HH', method_sig[0], method_sig[1]) + args
+        sent = 0
 
         if content:
             # do this early, so we can raise an exception if there's a
@@ -207,3 +212,8 @@ class MethodWriter(object):
             chunk_size = self.frame_max - 8
             for i in xrange(0, len(body), chunk_size):
                 self.dest.write_frame(3, channel, body[i:i + chunk_size])
+        self.bytes_sent += 1
+
+    def send_heartbeat(self):
+        self.dest.write_frame(FRAME_HEARTBEAT, 0, '')
+

@@ -20,11 +20,11 @@ __all__ = ["AMQPError", "AMQPConnectionError",
             "AMQPChannelError", "AMQPInternalError"]
 
 
-class AMQPInternalError(Exception):
+class AMQPRecoverableError(Exception):
     pass
 
 
-class AMQPError(Exception):
+class AMQPError(AMQPRecoverableError):
 
     def __init__(self, reply_code, reply_text, method_sig):
         self.amqp_reply_code = reply_code
