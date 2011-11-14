@@ -1,7 +1,3 @@
-"""
-Convert between frames and higher-level AMQP methods
-
-"""
 # Copyright (C) 2007-2008 Barry Pederson <bp@barryp.org>
 #
 # This library is free software; you can redistribute it and/or
@@ -17,8 +13,9 @@ Convert between frames and higher-level AMQP methods
 # You should have received a copy of the GNU Lesser General Public
 # License along with this library; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
+from __future__ import absolute_import
 
-from Queue import Empty, Queue
+from Queue import Queue
 from struct import pack, unpack
 from time import time
 
@@ -28,46 +25,20 @@ except NameError:
     # Python 2.5 and lower
     bytes = str
 
-try:
-    from collections import defaultdict
-except:
-    class defaultdict(dict):
-        """
-        Mini-implementation of collections.defaultdict that
-        appears in Python 2.5 and up.
+from collections import defaultdict
 
-        """
-        def __init__(self, default_factory):
-            dict.__init__(self)
-            self.default_factory = default_factory
+from .basic_message import Message
+from .serialization import AMQPReader
 
-        def __getitem__(self, key):
-            try:
-                return dict.__getitem__(self, key)
-            except KeyError:
-                result = self.default_factory()
-                dict.__setitem__(self, key, result)
-                return result
+__all__ = ["MethodReader"]
 
-
-from basic_message import Message
-from exceptions import *
-from serialization import AMQPReader
-
-__all__ =  [
-            'MethodReader',
-           ]
-
-#
-# MethodReader needs to know which methods are supposed
-# to be followed by content headers and bodies.
-#
+#: MethodReader needs to know which methods are supposed
+#: to be followed by content headers and bodies.
 _CONTENT_METHODS = [
-    (60, 50), # Basic.return
-    (60, 60), # Basic.deliver
-    (60, 71), # Basic.get_ok
-    ]
-
+    (60, 50),   # Basic.return
+    (60, 60),   # Basic.deliver
+    (60, 71),   # Basic.get_ok
+]
 
 FRAME_METHOD = 1
 FRAME_HEADER = 2
@@ -75,12 +46,9 @@ FRAME_BODY = 3
 FRAME_HEARTBEAT = 8
 
 
-
 class _PartialMessage(object):
-    """
-    Helper class to build up a multi-frame method.
+    """Helper class to build up a multi-frame method."""
 
-    """
     def __init__(self, method_sig, args):
         self.method_sig = method_sig
         self.args = args
@@ -90,12 +58,10 @@ class _PartialMessage(object):
         self.body_size = None
         self.complete = False
 
-
     def add_header(self, payload):
-        class_id, weight, self.body_size = unpack('>HHQ', payload[:12])
+        _, _, self.body_size = unpack('>HHQ', payload[:12])
         self.msg._load_properties(payload[12:])
         self.complete = (self.body_size == 0)
-
 
     def add_payload(self, payload):
         self.body_parts.append(payload)
@@ -107,20 +73,20 @@ class _PartialMessage(object):
 
 
 class MethodReader(object):
-    """
-    Helper class to receive frames from the broker, combine them if
+    """Helper class to receive frames from the broker, combine them if
     necessary with content-headers and content-bodies into complete methods.
 
     Normally a method is represented as a tuple containing
-    (channel, method_sig, args, content).
+    ``(channel, method_sig, args, content)``.
 
-    In the case of a framing error, an AMQPConnectionException is placed
+    In the case of a framing error, an :exc:`AMQPConnectionError` is placed
     in the queue.
 
     In the case of unexpected frames, a tuple made up of
-    (channel, AMQPChannelException) is placed in the queue.
+    ``(channel, AMQPChannelError)`` is placed in the queue.
 
     """
+
     def __init__(self, source):
         self.source = source
         self.queue = Queue()
@@ -130,31 +96,23 @@ class MethodReader(object):
         # For each channel, which type is expected next
         self.expected_types = defaultdict(lambda: FRAME_METHOD)
 
-
     def _next_method(self):
-        """
-        Read the next method from the source, once one complete method has
-        been assembled it is placed in the internal queue.
-
-        """
+        """Read the next method from the source, once one complete method has
+        been assembled it is placed in the internal queue."""
         while self.queue.empty():
             try:
                 frame_type, channel, payload = self.source.read_frame()
             except Exception, e:
-                #
                 # Connection was closed?  Framing Error?
-                #
                 self.queue.put(e)
                 break
 
             if frame_type not in (self.expected_types[channel],
                                   FRAME_HEARTBEAT):
-                self.queue.put((
-                    channel,
-                    Exception('Received frame type %s while expecting types: %s' %
-                        (frame_type, self.expected_types[channel])
-                        )
-                    ))
+                self.queue.put((channel,
+                    Exception(
+                        "Received frame type %s while expecting type: %s" % (
+                            frame_type, self.expected_types[channel]))))
             elif frame_type == FRAME_METHOD:
                 self._process_method_frame(channel, payload)
             elif frame_type == FRAME_HEADER:
@@ -173,67 +131,43 @@ class MethodReader(object):
         self.source.write_frame(FRAME_HEARTBEAT, 0, '')
 
     def _process_method_frame(self, channel, payload):
-        """
-        Process Method frames
-
-        """
         method_sig = unpack('>HH', payload[:4])
         args = AMQPReader(payload[4:])
 
         if method_sig in _CONTENT_METHODS:
-            #
             # Save what we've got so far and wait for the content-header
-            #
             self.partial_messages[channel] = _PartialMessage(method_sig, args)
             self.expected_types[channel] = 2
         else:
             self.queue.put((channel, method_sig, args, None))
 
-
     def _process_content_header(self, channel, payload):
-        """
-        Process Content Header frames
-
-        """
         partial = self.partial_messages[channel]
         partial.add_header(payload)
 
         if partial.complete:
-            #
             # a bodyless message, we're done
-            #
-            self.queue.put((channel, partial.method_sig, partial.args, partial.msg))
-            del self.partial_messages[channel]
+            self.queue.put((channel, partial.method_sig,
+                            partial.args, partial.msg))
+            self.partial_messages.pop(channel, None)
             self.expected_types[channel] = FRAME_METHOD
         else:
-            #
             # wait for the content-body
-            #
             self.expected_types[channel] = FRAME_BODY
 
-
     def _process_content_body(self, channel, payload):
-        """
-        Process Content Body frames
-
-        """
         partial = self.partial_messages[channel]
         partial.add_payload(payload)
         if partial.complete:
-            #
             # Stick the message in the queue and go back to
             # waiting for method frames
-            #
-            self.queue.put((channel, partial.method_sig, partial.args, partial.msg))
-            del self.partial_messages[channel]
+            self.queue.put((channel, partial.method_sig,
+                            partial.args, partial.msg))
+            self.partial_messages.pop(channel, None)
             self.expected_types[channel] = FRAME_METHOD
 
-
     def read_method(self):
-        """
-        Read a method from the peer.
-
-        """
+        """Read a method from the peer."""
         self._next_method()
         m = self.queue.get()
         if isinstance(m, Exception):
@@ -242,11 +176,8 @@ class MethodReader(object):
 
 
 class MethodWriter(object):
-    """
-    Convert AMQP methods into AMQP frames and send them out
-    to the peer.
+    """Convert AMQP methods into AMQP frames and send them out to the peer."""
 
-    """
     def __init__(self, dest, frame_max):
         self.dest = dest
         self.frame_max = frame_max
@@ -260,10 +191,9 @@ class MethodWriter(object):
             # first frame
             body = content.body
             if isinstance(body, unicode):
-                coding = content.properties.get('content_encoding', None)
+                coding = content.properties.get("content_encoding")
                 if coding is None:
                     coding = content.properties['content_encoding'] = 'UTF-8'
-
                 body = body.encode(coding)
             properties = content._serialize_properties()
 
@@ -276,4 +206,4 @@ class MethodWriter(object):
 
             chunk_size = self.frame_max - 8
             for i in xrange(0, len(body), chunk_size):
-                self.dest.write_frame(3, channel, body[i:i+chunk_size])
+                self.dest.write_frame(3, channel, body[i:i + chunk_size])

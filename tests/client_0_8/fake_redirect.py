@@ -76,7 +76,7 @@ class FakeRedirectConnection(amqp.Connection):
                 self.wait(allowed_methods=[
                         (10, 60), # close
                         ])
-            except amqp.AMQPConnectionException:
+            except amqp.AMQPConnectionError:
                 pass
 
         print 'Redirect finished'

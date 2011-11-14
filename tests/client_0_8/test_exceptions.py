@@ -28,7 +28,7 @@ from kamqp.client_0_8.exceptions import *
 
 class TestException(unittest.TestCase):
     def test_exception(self):
-        exc = AMQPException(7, 'My Error', (10, 10))
+        exc = AMQPError(7, 'My Error', (10, 10))
         self.assertEqual(exc.amqp_reply_code, 7)
         self.assertEqual(exc.amqp_reply_text, 'My Error')
         self.assertEqual(exc.amqp_method_sig, (10, 10))

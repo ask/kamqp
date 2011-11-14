@@ -1,7 +1,3 @@
-"""
-Exceptions used by kamqp.client_0_8
-
-"""
 # Copyright (C) 2007-2008 Barry Pederson <bp@barryp.org>
 #
 # This library is free software; you can redistribute it and/or
@@ -18,33 +14,40 @@ Exceptions used by kamqp.client_0_8
 # License along with this library; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 
+from __future__ import absolute_import
 
-__all__ =  [
-            'AMQPException',
-            'AMQPConnectionException',
-            'AMQPChannelException',
-           ]
+__all__ = ["AMQPError", "AMQPConnectionError",
+            "AMQPChannelError", "AMQPInternalError"]
 
 
-class AMQPException(Exception):
-    def __init__(self, reply_code, reply_text, method_sig):
-        Exception.__init__(self)
-        self.amqp_reply_code = reply_code
-        self.amqp_reply_text = reply_text
-        self.amqp_method_sig = method_sig
-        self.args = (
-            reply_code,
-            reply_text,
-            method_sig,
-            METHOD_NAME_MAP.get(method_sig, '')
-            )
-
-
-class AMQPConnectionException(AMQPException):
+class AMQPInternalError(Exception):
     pass
 
 
-class AMQPChannelException(AMQPException):
+class AMQPError(Exception):
+
+    def __init__(self, reply_code, reply_text, method_sig):
+        self.amqp_reply_code = reply_code
+        self.amqp_reply_text = reply_text
+        self.amqp_method_sig = method_sig
+        Exception.__init__(self, reply_code, reply_text, method_sig)
+
+    def __str__(self):
+        return "%r %r %r %r>" % (
+                self.amqp_reply_code,
+                self.amqp_reply_text,
+                self.amqp_method_sig,
+                METHOD_NAME_MAP.get(self.amqp_method_sig))
+
+    def __repr__(self):
+        return "<%s: %s>" % (self.__class__.__name__, self)
+
+
+class AMQPConnectionError(AMQPError):
+    pass
+
+
+class AMQPChannelError(AMQPError):
     pass
 
 

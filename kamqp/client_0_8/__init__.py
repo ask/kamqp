@@ -1,7 +1,4 @@
-"""
-AMQP Client implementing the 0-8 spec.
-
-"""
+"""AMQP Client implementing the 0-8 spec."""
 # Copyright (C) 2007-2008 Barry Pederson <bp@barryp.org>
 #
 # This library is free software; you can redistribute it and/or
@@ -21,16 +18,12 @@ AMQP Client implementing the 0-8 spec.
 #
 # Pull in the public items from the various sub-modules
 #
-from basic_message import *
-from channel import *
-from connection import *
-from exceptions import *
+from .basic_message import Message
+from .channel import Channel
+from .connection import Connection
+from .exceptions import (AMQPError, AMQPConnectionError,
+                         AMQPChannelError, AMQPInternalError)
 
-__all__ =  [
-            'Connection',
-            'Channel',      # here mainly so it shows in in pydoc
-            'Message',
-            'AMQPException',
-            'AMQPConnectionException',
-            'AMQPChannelException',
-           ]
+__all__ = ["Connection", "Channel", "Message", "AMQPError",
+           "AMQPConnectionError", "AMQPChannelError",
+           "AMQPInternalError"]

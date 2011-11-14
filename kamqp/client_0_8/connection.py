@@ -1,7 +1,3 @@
-"""
-AMQP 0-8 Connections
-
-"""
 # Copyright (C) 2007-2008 Barry Pederson <bp@barryp.org>
 #
 # This library is free software; you can redistribute it and/or
@@ -32,7 +28,7 @@ from .. import __version__
 
 from .abstract_channel import AbstractChannel
 from .channel import Channel
-from .exceptions import AMQPException, AMQPConnectionException
+from .exceptions import AMQPInternalError, AMQPConnectionError
 from .method_framing import MethodReader, MethodWriter
 from .serialization import AMQPWriter
 from .transport import create_transport
@@ -102,13 +98,14 @@ class Connection(AbstractChannel):
             d.update(client_properties)
 
         self.known_hosts = ''
+        self.transport = None
 
         while 1:
             self.channels = {}
             # The connection object itself is treated as channel 0
             super(Connection, self).__init__(self, 0)
 
-            self.transport = None
+            self._close_transport()
 
             # Properties set in the Tune method
             self.heartbeat = heartbeat or 0
@@ -148,6 +145,11 @@ class Connection(AbstractChannel):
             except Exception:
                 pass
                 return
+
+    def _close_transport(self):
+        if self.transport is not None:
+            self.transport.close()
+            self.transport = None
 
     def drain_events(self, allowed_methods=None, timeout=None):
         """Wait for an event on any channel."""
@@ -234,8 +236,7 @@ class Connection(AbstractChannel):
                 wait()
 
     def _do_close(self):
-        self.transport.close()
-        self.transport = None
+        self._close_transport()
 
         channels = [x for x in self.channels.values() if x is not self]
         for ch in channels:
@@ -246,7 +247,7 @@ class Connection(AbstractChannel):
         for i in xrange(1, self.channel_max + 1):
             if i not in self.channels:
                 return i
-        raise AMQPException(
+        raise AMQPInternalError(
                 "No free channel ids, current=%d, channel_max=%d" % (
                     len(self.channels), self.channel_max))
 
@@ -392,7 +393,7 @@ class Connection(AbstractChannel):
         method_id = args.read_short()
 
         self._x_close_ok()
-        raise AMQPConnectionException(reply_code,
+        raise AMQPConnectionError(reply_code,
                                       reply_text,
                                       (class_id, method_id))
 

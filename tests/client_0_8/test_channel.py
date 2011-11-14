@@ -32,7 +32,7 @@ except NameError:
 import settings
 
 
-from kamqp.client_0_8 import AMQPChannelException, AMQPException, Connection, Message
+from kamqp.client_0_8 import AMQPChannelError, AMQPError, Connection, Message
 
 
 class TestChannel(unittest.TestCase):
@@ -176,7 +176,7 @@ class TestChannel(unittest.TestCase):
         exceptions.
 
         """
-        self.assertRaises(AMQPChannelException, self.ch.queue_delete, 'bogus_queue_that_does_not_exist')
+        self.assertRaises(AMQPChannelError, self.ch.queue_delete, 'bogus_queue_that_does_not_exist')
 
 
     def test_invalid_header(self):
