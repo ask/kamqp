@@ -2486,6 +2486,30 @@ class Channel(AbstractChannel):
         """
         pass
 
+    def confirm_select(self, nowait=False):
+        """This method sets the channel to use publisher acknowledgements.
+
+        The client can only use this method on a non-transactional channel.
+
+        :param nowait:
+            If set, the server will not respond to the method.
+            The client should not wait for a reply method.  If the server
+            could not complete the method it will raise a channel
+            or connection exception.
+
+        """
+        args = AMQPWriter()
+        args.write_bit(nowait)
+        self._send_method((85, 10), args)
+        if not nowait:
+            # wait for Confirm.select_ok
+            self.wait(allowed_methods=[(85, 11)])
+
+    def _confirm_select_ok(self, args):
+        """This method confirms to the client that the channel was successfully
+        set to use publisher acknowledgements."""
+        pass
+
     _METHOD_MAP = {
         (20, 11): _open_ok,
         (20, 20): _flow,
@@ -2511,6 +2535,7 @@ class Channel(AbstractChannel):
         (90, 11): _tx_select_ok,
         (90, 21): _tx_commit_ok,
         (90, 31): _tx_rollback_ok,
+        (85, 11): _confirm_select_ok,
         }
 
     _IMMEDIATE_METHODS = [(60, 50)]     # basic_return
