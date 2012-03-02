@@ -1,4 +1,4 @@
-"""AMQP Client implementing the 0-8 spec."""
+"""AMQP Client implementing the 0-8/0-9-1 spec."""
 # Copyright (C) 2007-2008 Barry Pederson <bp@barryp.org>
 #
 # This library is free software; you can redistribute it and/or
@@ -22,8 +22,8 @@ from .basic_message import Message
 from .channel import Channel
 from .connection import Connection
 from .exceptions import (AMQPError, AMQPConnectionError,
-                         AMQPChannelError, AMQPInternalError)
+                         AMQPChannelError, AMQPRecoverableError)
 
 __all__ = ["Connection", "Channel", "Message", "AMQPError",
            "AMQPConnectionError", "AMQPChannelError",
-           "AMQPInternalError"]
+           "AMQPRecoverableError"]

@@ -15,6 +15,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 from __future__ import absolute_import
 
+from .exceptions import AMQPRecoverableError
 from .serialization import AMQPWriter
 
 try:
@@ -35,7 +36,7 @@ class AbstractChannel(object):
 
     """
     def __init__(self, connection, channel_id):
-        self.connection = connection
+        self._connection = connection
         self.channel_id = channel_id
         connection.channels[channel_id] = self
         self.method_queue = []  # higher level queue for methods
@@ -83,6 +84,13 @@ class AbstractChannel(object):
             return amqp_method(self, args)
         else:
             return amqp_method(self, args, content)
+
+    @property
+    def connection(self):
+        if self._connection is None:
+            raise AMQPRecoverableError("Connection is closed.")
+        return self._connection
+
 
     #: Placeholder, the concrete implementations will have to
     #: supply their own versions of _METHOD_MAP

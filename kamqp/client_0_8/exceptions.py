@@ -17,7 +17,7 @@
 from __future__ import absolute_import
 
 __all__ = ["AMQPError", "AMQPConnectionError",
-            "AMQPChannelError", "AMQPInternalError"]
+            "AMQPChannelError", "AMQPRecoverableError"]
 
 
 class AMQPRecoverableError(Exception):
